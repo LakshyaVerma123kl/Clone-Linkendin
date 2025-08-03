@@ -33,6 +33,14 @@ const userSchema = new mongoose.Schema(
       type: String,
       default: "",
     },
+    isOnline: {
+      type: Boolean,
+      default: false,
+    },
+    lastSeen: {
+      type: Date,
+      default: Date.now,
+    },
   },
   {
     timestamps: true,
@@ -61,6 +69,10 @@ const postSchema = new mongoose.Schema(
     ],
     comments: [
       {
+        _id: {
+          type: mongoose.Schema.Types.ObjectId,
+          default: () => new mongoose.Types.ObjectId(),
+        },
         user: {
           type: mongoose.Schema.Types.ObjectId,
           ref: "User",
@@ -75,6 +87,11 @@ const postSchema = new mongoose.Schema(
           type: Date,
           default: Date.now,
         },
+      },
+    ],
+    images: [
+      {
+        type: String,
       },
     ],
   },
@@ -112,8 +129,17 @@ export interface IUser {
   email: string;
   bio: string;
   profileImage?: string;
+  isOnline?: boolean;
+  lastSeen?: Date;
   createdAt: Date;
   updatedAt: Date;
+}
+
+export interface IComment {
+  _id: string;
+  user: IUser;
+  content: string;
+  createdAt: Date;
 }
 
 export interface IPost {
@@ -121,11 +147,8 @@ export interface IPost {
   content: string;
   author: IUser;
   likes: string[];
-  comments: {
-    user: IUser;
-    content: string;
-    createdAt: Date;
-  }[];
+  comments: IComment[];
+  images?: string[];
   createdAt: Date;
   updatedAt: Date;
 }
