@@ -1,4 +1,8 @@
-import { connectToDatabase, User, Post } from "@/models";
+// Load environment variables from .env.local
+import dotenv from "dotenv";
+dotenv.config({ path: ".env.local" });
+
+import { connectToDatabase, User, Post } from "../models";
 import { hashPassword } from "./auth";
 
 const sampleUsers = [
@@ -159,3 +163,15 @@ export async function seedDatabase() {
     throw error;
   }
 }
+
+// Run the seeding process when executing this file
+seedDatabase()
+  .then((result) => {
+    console.log("✅ Seeding complete!");
+    console.log(result);
+    process.exit(0);
+  })
+  .catch((err) => {
+    console.error("❌ Seeding failed:", err);
+    process.exit(1);
+  });

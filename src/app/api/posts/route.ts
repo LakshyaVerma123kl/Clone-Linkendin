@@ -1,152 +1,293 @@
-// src/app/api/posts/route.ts
-import { NextRequest, NextResponse } from "next/server";
-import { connectToDatabase, Post } from "@/models";
-import { getCurrentUser } from "@/lib/auth";
+// src/app/api/posts/route.ts - Using your middleware system
+import { NextRequest } from "next/server";
+import { Post, User } from "@/models";
+import {
+  createAPIHandler,
+  createSuccessResponse,
+  createErrorResponse,
+  validationSchemas,
+  generateRequestId,
+} from "@/lib/middleware";
 
-// GET - Fetch all posts with improved error handling
-export async function GET(request: NextRequest) {
+// GET - Fetch posts with middleware
+const getPosts = createAPIHandler({
+  rateLimit: "general",
+});
+
+export const GET = getPosts(async (request: NextRequest) => {
+  const requestId = generateRequestId();
+
   try {
-    await connectToDatabase();
-
     const { searchParams } = new URL(request.url);
     const userId = searchParams.get("userId");
-    const page = parseInt(searchParams.get("page") || "1");
-    const limit = Math.min(parseInt(searchParams.get("limit") || "10"), 50); // Max 50 posts per request
+    const page = Math.max(1, parseInt(searchParams.get("page") || "1"));
+    const limit = Math.min(
+      50,
+      Math.max(1, parseInt(searchParams.get("limit") || "10"))
+    );
     const skip = (page - 1) * limit;
 
-    let query = {};
+    // Build query object
+    let query: any = {};
     if (userId) {
-      query = { author: userId };
+      // Validate ObjectId format
+      if (!/^[0-9a-fA-F]{24}$/.test(userId)) {
+        return createErrorResponse(
+          "Invalid user ID format",
+          "INVALID_USER_ID",
+          400,
+          null,
+          requestId
+        );
+      }
+      query.author = userId;
     }
 
     const [posts, total] = await Promise.all([
       Post.find(query)
-        .populate("author", "name email bio avatar")
+        .populate("author", "name email bio avatar isOnline lastSeen")
         .populate("comments.user", "name email avatar")
         .populate("likes", "name email")
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
-        .lean(), // Use lean() for better performance
+        .lean(),
       Post.countDocuments(query),
     ]);
 
-    return NextResponse.json({
-      success: true,
-      posts,
-      pagination: {
-        page,
-        limit,
-        total,
-        pages: Math.ceil(total / limit),
-        hasNext: skip + limit < total,
-        hasPrev: page > 1,
-      },
-    });
-  } catch (error: any) {
-    console.error("Get posts error:", error);
-    return NextResponse.json(
+    const pagination = {
+      page,
+      limit,
+      total,
+      pages: Math.ceil(total / limit),
+      hasNext: skip + limit < total,
+      hasPrev: page > 1,
+    };
+
+    return createSuccessResponse(
       {
-        success: false,
-        error: "Failed to fetch posts",
-        details:
-          process.env.NODE_ENV === "development" ? error.message : undefined,
+        posts,
+        pagination,
       },
-      { status: 500 }
+      `Retrieved ${posts.length} posts`,
+      200,
+      requestId
+    );
+  } catch (error: any) {
+    console.error(`[${requestId}] Get posts error:`, error);
+
+    if (error.name === "CastError") {
+      return createErrorResponse(
+        "Invalid ID format in query",
+        "INVALID_ID_FORMAT",
+        400,
+        error.message,
+        requestId
+      );
+    }
+
+    return createErrorResponse(
+      "Failed to fetch posts",
+      "FETCH_POSTS_ERROR",
+      500,
+      error.message,
+      requestId
     );
   }
-}
+});
 
-// POST - Create new post with enhanced validation
-export async function POST(request: NextRequest) {
+// POST - Create post with middleware
+const createPost = createAPIHandler({
+  requireAuth: true,
+  rateLimit: "posts",
+  validation: validationSchemas.post,
+});
+
+export const POST = createPost(
+  async (request: NextRequest, { userId, validatedData }) => {
+    const requestId = generateRequestId();
+
+    try {
+      const { content, images } = validatedData;
+
+      // Additional validation for images
+      if (images) {
+        if (!Array.isArray(images)) {
+          return createErrorResponse(
+            "Images must be an array",
+            "INVALID_IMAGES_FORMAT",
+            400,
+            null,
+            requestId
+          );
+        }
+
+        if (images.length > 5) {
+          return createErrorResponse(
+            "Maximum 5 images allowed per post",
+            "TOO_MANY_IMAGES",
+            400,
+            null,
+            requestId
+          );
+        }
+
+        // Validate each image URL
+        for (const imageUrl of images) {
+          if (typeof imageUrl !== "string" || !isValidImageUrl(imageUrl)) {
+            return createErrorResponse(
+              "Invalid image URL provided",
+              "INVALID_IMAGE_URL",
+              400,
+              null,
+              requestId
+            );
+          }
+        }
+      }
+
+      // Check if user exists
+      const userExists = await User.findById(userId);
+      if (!userExists) {
+        return createErrorResponse(
+          "User not found",
+          "USER_NOT_FOUND",
+          404,
+          null,
+          requestId
+        );
+      }
+
+      // Create post
+      const post = await Post.create({
+        content: content.trim(),
+        author: userId,
+        images: images || [],
+      });
+
+      // Populate the created post
+      const populatedPost = await Post.findById(post._id)
+        .populate("author", "name email bio avatar isOnline lastSeen")
+        .populate("comments.user", "name email avatar")
+        .populate("likes", "name email")
+        .lean();
+
+      // Update user's last activity
+      await User.findByIdAndUpdate(userId, {
+        lastSeen: new Date(),
+        isOnline: true,
+      });
+
+      return createSuccessResponse(
+        { post: populatedPost },
+        "Post created successfully",
+        201,
+        requestId
+      );
+    } catch (error: any) {
+      console.error(`[${requestId}] Create post error:`, error);
+
+      return createErrorResponse(
+        "Failed to create post",
+        "CREATE_POST_ERROR",
+        500,
+        error.message,
+        requestId
+      );
+    }
+  }
+);
+
+// DELETE - Delete post with middleware
+const deletePost = createAPIHandler({
+  requireAuth: true,
+  rateLimit: "general",
+});
+
+export const DELETE = deletePost(async (request: NextRequest, { userId }) => {
+  const requestId = generateRequestId();
+
   try {
-    await connectToDatabase();
+    const { searchParams } = new URL(request.url);
+    const postId = searchParams.get("postId");
 
-    const userId = await getCurrentUser(request);
-    if (!userId) {
-      return NextResponse.json(
-        { success: false, error: "Unauthorized" },
-        { status: 401 }
+    if (!postId || !/^[0-9a-fA-F]{24}$/.test(postId)) {
+      return createErrorResponse(
+        "Valid post ID is required",
+        "INVALID_POST_ID",
+        400,
+        null,
+        requestId
       );
     }
 
-    const body = await request.json();
-    const { content } = body;
+    const post = await Post.findById(postId);
 
-    // Enhanced validation
-    if (!content || typeof content !== "string") {
-      return NextResponse.json(
-        {
-          success: false,
-          error: "Post content is required and must be a string",
-        },
-        { status: 400 }
+    if (!post) {
+      return createErrorResponse(
+        "Post not found",
+        "POST_NOT_FOUND",
+        404,
+        null,
+        requestId
       );
     }
 
-    const trimmedContent = content.trim();
-
-    if (trimmedContent.length === 0) {
-      return NextResponse.json(
-        { success: false, error: "Post content cannot be empty" },
-        { status: 400 }
+    // Check if user owns the post
+    if (post.author.toString() !== userId) {
+      return createErrorResponse(
+        "You don't have permission to delete this post",
+        "FORBIDDEN",
+        403,
+        null,
+        requestId
       );
     }
 
-    if (trimmedContent.length > 1000) {
-      return NextResponse.json(
-        { success: false, error: "Post content cannot exceed 1000 characters" },
-        { status: 400 }
-      );
-    }
+    await Post.findByIdAndDelete(postId);
 
-    // Create post
-    const post = await Post.create({
-      content: trimmedContent,
-      author: userId,
-    });
-
-    // Populate the created post
-    const populatedPost = await Post.findById(post._id)
-      .populate("author", "name email bio avatar")
-      .populate("comments.user", "name email avatar")
-      .populate("likes", "name email")
-      .lean();
-
-    return NextResponse.json(
-      {
-        success: true,
-        message: "Post created successfully",
-        post: populatedPost,
-      },
-      { status: 201 }
+    return createSuccessResponse(
+      { deletedPostId: postId },
+      "Post deleted successfully",
+      200,
+      requestId
     );
   } catch (error: any) {
-    console.error("Create post error:", error);
+    console.error(`[${requestId}] Delete post error:`, error);
 
-    // Handle validation errors
-    if (error.name === "ValidationError") {
-      const validationErrors = Object.values(error.errors).map(
-        (err: any) => err.message
-      );
-      return NextResponse.json(
-        {
-          success: false,
-          error: "Validation failed",
-          details: validationErrors,
-        },
-        { status: 400 }
-      );
-    }
-
-    return NextResponse.json(
-      {
-        success: false,
-        error: "Failed to create post",
-        details:
-          process.env.NODE_ENV === "development" ? error.message : undefined,
-      },
-      { status: 500 }
+    return createErrorResponse(
+      "Failed to delete post",
+      "DELETE_POST_ERROR",
+      500,
+      error.message,
+      requestId
     );
+  }
+});
+
+// Utility function to validate image URLs
+function isValidImageUrl(url: string): boolean {
+  try {
+    const urlObj = new URL(url);
+    const validDomains = [
+      "images.unsplash.com",
+      "cdn.cloudinary.com",
+      "res.cloudinary.com",
+      "i.imgur.com",
+      "media.githubusercontent.com",
+      "via.placeholder.com", // For testing
+    ];
+
+    const hasValidDomain = validDomains.some((domain) =>
+      urlObj.hostname.includes(domain)
+    );
+
+    const hasValidExtension = /\.(jpg|jpeg|png|gif|webp)$/i.test(
+      urlObj.pathname
+    );
+
+    return hasValidDomain && hasValidExtension;
+  } catch {
+    return false;
   }
 }

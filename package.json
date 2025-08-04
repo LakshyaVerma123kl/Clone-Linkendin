@@ -6,7 +6,9 @@
     "dev": "next dev --turbopack",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "seed": "ts-node -P tsconfig.seeding.json src/lib/seed.ts",
+    "seed:alias": "node --loader ts-node/esm -r tsconfig-paths/register src/lib/seed.ts"
   },
   "dependencies": {
     "bcryptjs": "^3.0.2",
@@ -30,6 +32,8 @@
     "eslint": "^9",
     "eslint-config-next": "15.4.5",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "ts-node": "^10.9.2",
+    "typescript": "^5.8.3",
+    "tsconfig-paths": "^4.2.0"
   }
 }
