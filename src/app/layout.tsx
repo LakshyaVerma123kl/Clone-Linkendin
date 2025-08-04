@@ -3,6 +3,7 @@ import { Inter } from "next/font/google";
 import "./globals.css";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { ThemeProvider } from "@/contexts/ThemeContext";
+import { NotificationProvider } from "@/contexts/NotificationContext";
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -54,7 +55,7 @@ export default function RootLayout({
           media="(prefers-color-scheme: dark)"
         />
 
-        {/* Dark/Light mode switch before rendering */}
+        {/* Apply theme immediately before rendering */}
         <script
           dangerouslySetInnerHTML={{
             __html: `
@@ -78,19 +79,21 @@ export default function RootLayout({
       <body className={`${inter.className} antialiased`}>
         <ThemeProvider>
           <AuthProvider>
-            <div className="min-h-screen bg-background text-foreground transition-colors duration-300">
-              {children}
-            </div>
+            <NotificationProvider>
+              <div className="min-h-screen bg-background text-foreground transition-colors duration-300">
+                {children}
+              </div>
+            </NotificationProvider>
           </AuthProvider>
         </ThemeProvider>
 
-        {/* Loading indicator for navigation */}
+        {/* Navigation loading indicator */}
         <div
           id="loading-bar"
           className="fixed top-0 left-0 w-full h-1 bg-blue-600 scale-x-0 origin-left transition-transform duration-300 z-50"
         ></div>
 
-        {/* Toast container */}
+        {/* Toast container fallback */}
         <div
           id="toast-container"
           className="fixed top-4 right-4 z-50 space-y-2"
